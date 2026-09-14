@@ -23,7 +23,7 @@ class ParsedTransaction:
 
     def as_dict(self) -> dict[str, object]:
         return {
-            "Date": self.date.isoformat(),
+            "Date": self.date,
             "Description": self.description,
             "Amount": float(self.amount) if self.amount is not None else None,
             "Type": self.type,

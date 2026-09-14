@@ -6,7 +6,14 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from spending_tracker.excel_store import append_transactions, ensure_workbook_copy
+from spending_tracker.dashboard import (
+    filter_transactions,
+    monthly_summary,
+    recent_transactions,
+    resolve_date_range,
+    summarize_transactions,
+)
+from spending_tracker.excel_store import append_transactions, ensure_workbook_copy, load_transactions
 from spending_tracker.parser import VALID_TYPES, parse_lines
 
 
@@ -17,7 +24,7 @@ DEFAULT_OUTPUT = Path("outputs/Chris 2023-2025 Spendings - tracker copy.xlsx")
 st.set_page_config(page_title="Spending Tracker", layout="wide")
 st.title("Spending Tracker")
 
-st.caption("Paste Notes-style entries, review the parsed rows, then append them to a Transactions sheet in a copy of your workbook.")
+st.caption("Review cash flow from your tracker workbook, then paste Notes-style entries when you want to add transactions.")
 
 with st.sidebar:
     st.header("Workbook")
@@ -25,6 +32,69 @@ with st.sidebar:
     output_path = Path(st.text_input("Output workbook", value=str(DEFAULT_OUTPUT)))
     default_date = st.date_input("Default date", value=date.today())
 
+@st.cache_data(show_spinner=False)
+def _load_dashboard_data(path_text: str) -> pd.DataFrame:
+    return load_transactions(Path(path_text))
+
+
+st.header("Dashboard")
+transactions = _load_dashboard_data(str(output_path))
+
+filter_col, recent_col = st.columns([3, 1])
+with filter_col:
+    date_filter = st.segmented_control(
+        "Date range",
+        options=["All time", "This month", "Last month", "This year", "Custom date range"],
+        default="All time",
+    )
+with recent_col:
+    recent_choice = st.selectbox("Recent rows", options=["Latest 10", "Latest 25", "All"], index=0)
+
+custom_start = None
+custom_end = None
+if date_filter == "Custom date range":
+    custom_start, custom_end = st.date_input(
+        "Custom period",
+        value=(date.today().replace(day=1), date.today()),
+    )
+
+selected_range = resolve_date_range(date_filter, date.today(), custom_start, custom_end)
+filtered_transactions = filter_transactions(transactions, selected_range)
+summary = summarize_transactions(filtered_transactions)
+
+metric_cols = st.columns(5)
+for column, label in zip(
+    metric_cols,
+    ["Expenses", "Income", "Rent", "Investments", "Net cash flow"],
+    strict=True,
+):
+    column.metric(label, f"${summary[label]:,.2f}")
+
+monthly = monthly_summary(filtered_transactions)
+left, right = st.columns([3, 2])
+with left:
+    st.subheader("Monthly Summary")
+    if monthly.empty:
+        st.info("No transactions found for this date range.")
+    else:
+        st.dataframe(monthly, use_container_width=True, hide_index=True)
+with right:
+    st.subheader("Monthly Expenses")
+    if monthly.empty:
+        st.info("No expense history to chart yet.")
+    else:
+        chart_data = monthly.sort_values("Month")[["Month", "Expenses"]].set_index("Month")
+        st.bar_chart(chart_data)
+
+st.subheader("Recent Transactions")
+limit = {"Latest 10": 10, "Latest 25": 25, "All": None}[recent_choice]
+recent = recent_transactions(filtered_transactions, limit)
+if recent.empty:
+    st.info("No transactions to show yet.")
+else:
+    st.dataframe(recent, use_container_width=True, hide_index=True)
+
+st.header("Add Transactions")
 sample = "uber 12\ntatte 8.50\nwhole foods 31\nTA (695.56)\nrent 1800\ninvestment 500"
 raw_text = st.text_area("Transactions", value=sample, height=220)
 
@@ -65,6 +135,7 @@ if df is not None and not df.empty:
             destination = ensure_workbook_copy(source_path, output_path)
             ready_rows = edited[["Date", "Description", "Amount", "Type", "Source Line"]].to_dict("records")
             count = append_transactions(destination, ready_rows)
+            _load_dashboard_data.clear()
             st.success(f"Added {count} transaction(s) to {destination}")
 else:
     st.info("Paste transactions and click Parse.")
