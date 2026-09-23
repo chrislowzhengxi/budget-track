@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 
-
-VALID_TYPES = ["Expense", "Income", "Rent", "Investment"]
+from spending_tracker.categories import categorize
+from spending_tracker.schema import VALID_TYPES
 
 AMOUNT_PATTERN = re.compile(r"(?P<paren>\()?[$]?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)(?(paren)\))")
 
@@ -20,6 +21,7 @@ class ParsedTransaction:
     source_line: str
     status: str
     note: str
+    category: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -27,17 +29,24 @@ class ParsedTransaction:
             "Description": self.description,
             "Amount": float(self.amount) if self.amount is not None else None,
             "Type": self.type,
+            "Category": self.category,
             "Source Line": self.source_line,
             "Status": self.status,
             "Note": self.note,
         }
 
 
-def parse_lines(text: str, default_date: date) -> list[ParsedTransaction]:
-    return [parse_line(line, default_date) for line in text.splitlines() if line.strip()]
+def parse_lines(
+    text: str, default_date: date, user_rules: Mapping[str, str] | None = None
+) -> list[ParsedTransaction]:
+    return [
+        parse_line(line, default_date, user_rules) for line in text.splitlines() if line.strip()
+    ]
 
 
-def parse_line(line: str, default_date: date) -> ParsedTransaction:
+def parse_line(
+    line: str, default_date: date, user_rules: Mapping[str, str] | None = None
+) -> ParsedTransaction:
     raw = line.strip()
     matches = list(AMOUNT_PATTERN.finditer(raw))
     if len(matches) != 1:
@@ -54,14 +63,16 @@ def parse_line(line: str, default_date: date) -> ParsedTransaction:
         return _needs_review(default_date, raw, "Missing description.")
 
     transaction_type = _infer_type(description, bool(match.group("paren")))
+    title = _title_description(description)
     return ParsedTransaction(
         date=default_date,
-        description=_title_description(description),
+        description=title,
         amount=amount,
         type=transaction_type,
         source_line=raw,
         status="Ready",
         note="",
+        category=categorize(title, transaction_type, user_rules),
     )
 
 
